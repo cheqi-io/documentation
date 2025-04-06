@@ -36,7 +36,7 @@
       },
       {
           "tab": "API Reference",
-          "openapi": "https://github.com/cheqi-io/open-api/blob/master/openapi.json"
+          "openapi": "https://raw.githubusercontent.com/cheqi-io/open-api/61375f3bba1653324f94f5e9f36d8ff55ad80943/openapi.json"
       }
     ],
     "global": {
