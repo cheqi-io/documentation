@@ -36,7 +36,7 @@
       },
       {
           "tab": "API Reference",
-          "openapi": "https://raw.githubusercontent.com/cheqi-io/open-api/61375f3bba1653324f94f5e9f36d8ff55ad80943/openapi.json"
+          "openapi": "https://complete-unduly-tadpole.ngrok-free.app/openapi/json"
       }
     ],
     "global": {
