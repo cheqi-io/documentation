@@ -1,10 +1,10 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Cheqi Docs",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
+    "primary": "#0263FE",
+    "light": "#FFFFFF",
     "dark": "#15803D"
   },
   "favicon": "/favicon.svg",
@@ -36,7 +36,7 @@
       },
       {
           "tab": "API Reference",
-          "openapi": "https://complete-unduly-tadpole.ngrok-free.app/openapi/json"
+          "openapi": "https://raw.githubusercontent.com/cheqi-io/open-api/refs/heads/master/openapi.json"
       }
     ],
     "global": {
