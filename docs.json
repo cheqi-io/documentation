@@ -42,7 +42,7 @@
       },
       {
           "tab": "API Reference",
-          "openapi": "https://raw.githubusercontent.com/cheqi-io/open-api/refs/heads/master/openapi.json"
+          "openapi": "https://test.api.cheqi.io/openapi/json"
       }
     ],
     "global": {
