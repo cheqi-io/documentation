@@ -1,0 +1,813 @@
+---
+title: 'Java SDK'
+description: 'Integrate Cheqi into your Java application with the official SDK'
+---
+
+## Installation
+
+### Maven
+
+Add the Cheqi SDK dependency to your `pom.xml`:
+
+```xml
+<dependency>
+    <groupId>io.cheqi</groupId>
+    <artifactId>cheqi-sdk</artifactId>
+    <version>1.0.3</version>
+</dependency>
+```
+
+### Gradle
+
+Add to your `build.gradle`:
+
+```gradle
+implementation 'io.cheqi:cheqi-sdk:1.0.3'
+```
+
+## Quick Start
+
+### With API Key
+
+```java
+import com.cheqi.sdk.CheqiSDK;
+import com.cheqi.sdk.config.Environment;
+import com.cheqi.sdk.models.*;
+import com.cheqi.sdk.receipt.ReceiptResult;
+import com.cheqi.commons.enums.CardProvider;
+
+// 1. Initialize SDK
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.PRODUCTION)
+    .apiKey(System.getenv("CHEQI_API_KEY"))
+    .build();
+
+// 2. Identify customer
+IdentificationDetails customer = IdentificationDetails.builder()
+    .paymentType(PaymentType.CARD_PAYMENT)
+    .cardDetails(CardDetails.builder()
+        .paymentAccountReference("PAR123456789")
+        .cardProvider(CardProvider.VISA)
+        .build())
+    .customerEmail("customer@example.com")
+    .build();
+
+// 3. Build receipt
+ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+    .documentNumber("INV-001")
+    .currency("EUR")
+    .totalAmount("12.10")
+    .totalTaxAmount("2.10")
+    .addProduct(Product.builder()
+        .name("Coffee")
+        .quantity(2.0)
+        .unitCode(UnitCode.ONE)
+        .unitPrice("5.00")
+        .subtotal("10.00")
+        .total("12.10")
+        .addTax(21.0, "VAT", "2.10")
+        .build())
+    .addTax(Tax.builder()
+        .rate(21.0)
+        .type("VAT")
+        .taxableAmount("10.00")
+        .amount("2.10")
+        .build())
+    .build();
+
+// 4. Send receipt
+ReceiptResult result = sdk.getReceiptService()
+    .processCompleteReceipt(customer, receipt);
+
+if (result.isSuccess()) {
+    System.out.println("✅ Receipt delivered!");
+}
+```
+
+### With OAuth 2.0
+
+For third-party integrations using OAuth 2.0, you'll exchange authorization codes for access tokens and use them with the SDK.
+
+#### 1. Exchange Authorization Code for Tokens
+
+After receiving the authorization code from the OAuth callback:
+
+```java
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+// Exchange authorization code for tokens
+HttpClient client = HttpClient.newHttpClient();
+HttpRequest request = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.cheqi.io/oauth2/token"))
+    .header("Content-Type", "application/json")
+    .POST(HttpRequest.BodyPublishers.ofString("""{
+        "grant_type": "authorization_code",
+        "code": "%s",
+        "client_id": "%s",
+        "client_secret": "%s",
+        "redirect_uri": "%s"
+    }""".formatted(
+        authorizationCode,
+        System.getenv("CHEQI_CLIENT_ID"),
+        System.getenv("CHEQI_CLIENT_SECRET"),
+        System.getenv("CHEQI_REDIRECT_URI")
+    )))
+    .build();
+
+HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+// Parse token response
+ObjectMapper mapper = new ObjectMapper();
+List<TokenResponse> tokens = mapper.readValue(
+    response.body(),
+    new TypeReference<List<TokenResponse>>() {}
+);
+```
+
+#### 2. Token Response Structure
+
+Each token in the response contains:
+
+```java
+public class TokenResponse {
+    private String accessToken;           // Use this for API calls
+    private String refreshToken;          // Use to get new access tokens
+    private Instant expiresAt;            // When access token expires
+    private Instant refreshExpiresAt;     // When refresh token expires
+    private UUID merchantId;              // Company ID this token is for
+    private String taxId;                 // Company tax ID
+    private String companyLegalName;      // Company legal name
+    private UUID customerId;              // Customer ID (if user-level token)
+    private String tokenType;             // "AUTHORIZATION_CODE"
+}
+```
+
+**Example response:**
+```json
+[
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "rt_1234567890abcdef1234567890abcdef",
+    "expires_at": "2024-01-13T23:00:00Z",
+    "refresh_expires_at": "2024-02-13T22:00:00Z",
+    "merchant_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tax_id": "NL123456789B01",
+    "company_legal_name": "Example Coffee Shop B.V.",
+    "token_type": "AUTHORIZATION_CODE"
+  }
+]
+```
+
+<Warning>
+  **Multiple tokens:** The response is an array because a merchant may authorize access to multiple companies. Store tokens separately for each `merchant_id`.
+</Warning>
+
+#### 3. Store Tokens Securely
+
+**You must store these tokens** to make API calls on behalf of merchants:
+
+```java
+// Example token storage model
+public class MerchantToken {
+    private UUID merchantId;
+    private String accessToken;
+    private String refreshToken;
+    private Instant expiresAt;
+    private Instant refreshExpiresAt;
+    private String companyLegalName;
+    
+    public boolean isExpired() {
+        return Instant.now().isAfter(expiresAt);
+    }
+    
+    public boolean needsRefresh() {
+        // Refresh 5 minutes before expiry
+        return Instant.now().plusSeconds(300).isAfter(expiresAt);
+    }
+}
+
+// Store in your database
+tokenRepository.save(new MerchantToken(
+    token.getMerchantId(),
+    token.getAccessToken(),
+    token.getRefreshToken(),
+    token.getExpiresAt(),
+    token.getRefreshExpiresAt(),
+    token.getCompanyLegalName()
+));
+```
+
+#### 4. Use Access Token with SDK
+
+```java
+// Initialize SDK (no API key needed)
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.PRODUCTION)
+    .build();
+
+// Retrieve stored token for merchant
+MerchantToken token = tokenRepository.findByMerchantId(merchantId);
+
+// Check if token needs refresh
+if (token.needsRefresh()) {
+    token = refreshAccessToken(token);
+}
+
+// Send receipt with access token
+ReceiptResult result = sdk.getReceiptService()
+    .processCompleteReceipt(
+        customer,
+        receipt,
+        token.getAccessToken()  // OAuth access token
+    );
+```
+
+#### 5. Refresh Access Tokens
+
+Access tokens expire after 1 hour. Use the refresh token to get a new access token:
+
+```java
+public MerchantToken refreshAccessToken(MerchantToken currentToken) {
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create("https://api.cheqi.io/oauth2/refresh"))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString("""{
+            "grant_type": "refresh_token",
+            "refresh_token": "%s",
+            "client_id": "%s",
+            "client_secret": "%s"
+        }""".formatted(
+            currentToken.getRefreshToken(),
+            System.getenv("CHEQI_CLIENT_ID"),
+            System.getenv("CHEQI_CLIENT_SECRET")
+        )))
+        .build();
+    
+    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    TokenResponse newToken = mapper.readValue(response.body(), TokenResponse.class);
+    
+    // Update stored token
+    currentToken.setAccessToken(newToken.getAccessToken());
+    currentToken.setRefreshToken(newToken.getRefreshToken());
+    currentToken.setExpiresAt(newToken.getExpiresAt());
+    currentToken.setRefreshExpiresAt(newToken.getRefreshExpiresAt());
+    
+    tokenRepository.save(currentToken);
+    return currentToken;
+}
+```
+
+<Info>
+  **Token lifecycle:**
+  - Access tokens expire after **1 hour**
+  - Refresh tokens expire after **30 days**
+  - Always refresh before expiry to avoid interruptions
+  - Store both tokens securely in your database
+</Info>
+
+## Configuration
+
+### Environment Selection
+
+```java
+// Production
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.PRODUCTION)
+    .build();
+
+// Test
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.TEST)
+    .build();
+
+// Sandbox
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.SANDBOX)
+    .build();
+
+// Custom endpoint
+CheqiSDK sdk = CheqiSDK.builder()
+    .customApiEndpoint("http://localhost:8080")
+    .build();
+```
+
+### Timeout & Retry Configuration
+
+```java
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.PRODUCTION)
+    .apiKey(apiKey)
+    .timeout(60)        // Request timeout in seconds
+    .maxRetries(5)      // Maximum retry attempts
+    .build();
+```
+
+## Receipt Processing
+
+### Complete Flow
+
+The `processCompleteReceipt` method handles everything:
+
+```java
+ReceiptResult result = sdk.getReceiptService()
+    .processCompleteReceipt(customer, receipt);
+
+// Check result
+if (result.isSuccess()) {
+    System.out.println("Delivered to " + result.getReceiptCount() + " devices");
+    System.out.println("Receipt ID: " + result.getCheqiReceiptId());
+} else if (result.isCustomerNotFound()) {
+    System.out.println("Customer not found");
+} else if (result.isDeliveredViaEmail()) {
+    System.out.println("Sent to: " + result.getEmailAddress());
+} else {
+    System.out.println("Failed: " + result.getMessage());
+}
+```
+
+### Step-by-Step (Advanced)
+
+For more control, use individual methods:
+
+```java
+// 1. Match customer
+RecipientResolutionResponse matchResponse = sdk.getMatchingService()
+    .matchCustomer(identificationDetails, accessToken);
+
+if (!matchResponse.isCustomerFound()) {
+    System.out.println("Customer not found");
+    return;
+}
+
+// 2. Generate receipt template
+String receiptJson = sdk.getReceiptService()
+    .generateReceiptTemplate(receiptRequest, accessToken);
+
+// 3. Create encrypted receipts
+Set<EncryptedReceiptRequestDto> encryptedReceipts = sdk.getReceiptService()
+    .createEncryptedReceipts(receiptJson, matchResponse.getRecipients());
+
+// 4. Send to backend
+ReceiptCreatedResponse response = sdk.getReceiptService()
+    .sendEncryptedReceipts(
+        encryptedReceipts,
+        templateHash,
+        matchResponse,
+        accessToken
+    );
+```
+
+## Building Products
+
+### Simple Products
+
+```java
+Product coffee = Product.builder()
+    .name("Espresso")
+    .quantity(2.0)
+    .unitCode(UnitCode.ONE)
+    .unitPrice("3.50")
+    .subtotal("7.00")
+    .total("8.47")
+    .addTax(21.0, "VAT", "1.47")
+    .build();
+```
+
+### Products with Discounts
+
+```java
+Product laptop = Product.builder()
+    .name("MacBook Pro")
+    .quantity(1.0)
+    .unitCode(UnitCode.ONE)
+    .unitPrice("2499.00")
+    .addDiscount("100.00", "Black Friday Sale")
+    .subtotal("2399.00")
+    .total("2902.79")
+    .addTax(21.0, "VAT", "503.79")
+    .build();
+```
+
+### Weight-Based Products
+
+```java
+Product cheese = Product.builder()
+    .name("Gouda Cheese")
+    .quantity(0.5)              // 500 grams
+    .baseQuantity(1.0)
+    .unitCode(UnitCode.KILOGRAM)
+    .unitPrice("12.00")         // Per kg
+    .subtotal("6.00")
+    .total("7.26")
+    .addTax(21.0, "VAT", "1.26")
+    .build();
+```
+
+### Time-Based Products
+
+```java
+Product subscription = Product.builder()
+    .name("Premium Subscription")
+    .quantity(1.0)
+    .baseQuantity(1.0)
+    .unitCode(UnitCode.MONTH)
+    .unitPrice("29.99")
+    .subtotal("29.99")
+    .total("36.29")
+    .addTax(21.0, "VAT", "6.30")
+    .period(Period.builder()
+        .startDate(LocalDate.of(2024, 1, 1))
+        .endDate(LocalDate.of(2024, 1, 31))
+        .description("January 2024")
+        .build())
+    .build();
+```
+
+### Convenience Method
+
+For simple products, use the shorthand:
+
+```java
+ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+    .documentNumber("INV-001")
+    .currency("EUR")
+    .totalAmount("302.50")
+    .totalTaxAmount("52.50")
+    
+    // Simple syntax - all amounts pre-calculated
+    .addProduct(
+        "Nike",        // brand
+        "AirMax",      // name
+        "125.00",      // unitPrice
+        "250.00",      // subtotal
+        21.0,          // taxRate
+        "52.50",       // taxAmount
+        "302.50",      // total
+        2.0            // quantity
+    )
+    
+    .addTax(Tax.builder()
+        .rate(21.0)
+        .type("VAT")
+        .amount("52.50")
+        .build())
+    .build();
+```
+
+## Tax Breakdown
+
+### Single Tax Rate
+
+```java
+Tax vat = Tax.builder()
+    .rate(21.0)
+    .type("VAT")
+    .taxableAmount("100.00")
+    .amount("21.00")
+    .label("VAT 21%")
+    .build();
+```
+
+### Multiple Tax Rates
+
+```java
+ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+    .documentNumber("INV-001")
+    .currency("EUR")
+    .totalAmount("11865.00")
+    .totalTaxAmount("1865.00")
+    
+    .addTax(Tax.builder()
+        .rate(19.0)
+        .type("VAT")
+        .taxableAmount("8500.00")
+        .amount("1615.00")
+        .label("VAT 19%")
+        .build())
+    
+    .addTax(Tax.builder()
+        .rate(9.0)
+        .type("VAT")
+        .taxableAmount("1500.00")
+        .amount("135.00")
+        .label("VAT 9% (reduced)")
+        .build())
+    
+    .build();
+```
+
+## Customer Identification
+
+### Card Payment
+
+```java
+IdentificationDetails customer = IdentificationDetails.builder()
+    .paymentType(PaymentType.CARD_PAYMENT)
+    .cardDetails(CardDetails.builder()
+        .paymentAccountReference("PAR123456789")
+        .cardProvider(CardProvider.VISA)
+        .build())
+    .build();
+```
+
+### IBAN Payment
+
+```java
+IdentificationDetails customer = IdentificationDetails.builder()
+    .paymentType(PaymentType.IBAN_PAYMENT)
+    .iban("NL91ABNA0417164300")
+    .build();
+```
+
+### With Email Fallback
+
+```java
+IdentificationDetails customer = IdentificationDetails.builder()
+    .paymentType(PaymentType.CARD_PAYMENT)
+    .cardDetails(CardDetails.builder()
+        .paymentAccountReference("PAR123456789")
+        .cardProvider(CardProvider.VISA)
+        .build())
+    .customerEmail("customer@example.com")  // Fallback
+    .build();
+```
+
+## Error Handling
+
+### Try-Catch Pattern
+
+```java
+import com.cheqi.sdk.exceptions.CheqiSDKException;
+import com.cheqi.sdk.http.exceptions.CheqiApiException;
+
+try {
+    ReceiptResult result = sdk.getReceiptService()
+        .processCompleteReceipt(customer, receipt);
+    
+    if (result.isSuccess()) {
+        System.out.println("Success!");
+    }
+} catch (CheqiApiException e) {
+    System.err.println("API Error: " + e.getMessage());
+    System.err.println("Status: " + e.getStatusCode());
+} catch (CheqiSDKException e) {
+    System.err.println("SDK Error: " + e.getMessage());
+    System.err.println("Error Code: " + e.getErrorCode());
+} catch (Exception e) {
+    System.err.println("Unexpected error: " + e.getMessage());
+}
+```
+
+### Retry Logic
+
+```java
+public ReceiptResult sendReceiptWithRetry(
+    IdentificationDetails customer,
+    ReceiptTemplateRequest receipt,
+    int maxRetries
+) {
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return sdk.getReceiptService()
+                .processCompleteReceipt(customer, receipt);
+        } catch (CheqiSDKException e) {
+            if (attempt == maxRetries) {
+                throw e;
+            }
+            
+            // Exponential backoff
+            long waitTime = (long) Math.pow(2, attempt) * 1000;
+            Thread.sleep(waitTime);
+        }
+    }
+    
+    throw new RuntimeException("Failed after " + maxRetries + " attempts");
+}
+```
+
+## Services
+
+### Receipt Service
+
+```java
+ReceiptService receipts = sdk.getReceiptService();
+
+// Complete flow
+ReceiptResult result = receipts.processCompleteReceipt(customer, receipt);
+
+// Individual steps
+String template = receipts.generateReceiptTemplate(request, accessToken);
+Set<EncryptedReceiptRequestDto> encrypted = receipts.createEncryptedReceipts(template, recipients);
+ReceiptCreatedResponse response = receipts.sendEncryptedReceipts(encrypted, hash, matchResponse, accessToken);
+```
+
+### Matching Service
+
+```java
+MatchingService matching = sdk.getMatchingService();
+
+RecipientResolutionResponse response = matching.matchCustomer(
+    identificationDetails,
+    accessToken
+);
+
+if (response.isCustomerFound()) {
+    List<Recipient> recipients = response.getRecipients();
+    String matchId = response.getMatchId();
+}
+```
+
+### Encryption Service
+
+```java
+EncryptionService encryption = sdk.getEncryptionService();
+
+// Encrypt receipt for recipients
+Set<EncryptedReceiptRequestDto> encrypted = encryption.encryptReceiptForRecipients(
+    receiptJson,
+    recipients
+);
+```
+
+### Decryption Service
+
+```java
+DecryptionService decryption = sdk.getDecryptionService();
+
+// Decrypt received receipt
+DecryptedReceipt receipt = decryption.decryptReceipt(
+    encryptedReceipt,
+    privateKeyPem
+);
+```
+
+## Testing
+
+### Unit Tests
+
+```java
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class ReceiptIntegrationTest {
+    
+    @Test
+    void testReceiptDelivery() {
+        CheqiSDK sdk = CheqiSDK.builder()
+            .apiEndpoint(Environment.SANDBOX)
+            .apiKey(System.getenv("CHEQI_TEST_API_KEY"))
+            .build();
+        
+        IdentificationDetails customer = IdentificationDetails.builder()
+            .paymentType(PaymentType.CARD_PAYMENT)
+            .cardDetails(CardDetails.builder()
+                .paymentAccountReference("TEST_PAR_123")
+                .cardProvider(CardProvider.VISA)
+                .build())
+            .build();
+        
+        ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+            .documentNumber("TEST-001")
+            .currency("EUR")
+            .totalAmount("10.00")
+            .totalTaxAmount("1.74")
+            .build();
+        
+        ReceiptResult result = sdk.getReceiptService()
+            .processCompleteReceipt(customer, receipt);
+        
+        assertTrue(result.isSuccess() || result.isCustomerNotFound());
+    }
+}
+```
+
+### Integration Tests
+
+```java
+@SpringBootTest
+class CheqiIntegrationTest {
+    
+    @Autowired
+    private CheqiSDK cheqiSDK;
+    
+    @Test
+    void testCompleteReceiptFlow() {
+        // Test customer matching
+        RecipientResolutionResponse matchResponse = cheqiSDK.getMatchingService()
+            .matchCustomer(testCustomer, testToken);
+        
+        assertNotNull(matchResponse);
+        
+        // Test receipt generation
+        String template = cheqiSDK.getReceiptService()
+            .generateReceiptTemplate(testReceipt, testToken);
+        
+        assertNotNull(template);
+        
+        // Test encryption
+        Set<EncryptedReceiptRequestDto> encrypted = cheqiSDK.getReceiptService()
+            .createEncryptedReceipts(template, matchResponse.getRecipients());
+        
+        assertFalse(encrypted.isEmpty());
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Environment Variables">
+    ```java
+    // ✅ GOOD
+    CheqiSDK sdk = CheqiSDK.builder()
+        .apiKey(System.getenv("CHEQI_API_KEY"))
+        .build();
+    
+    // ❌ BAD
+    CheqiSDK sdk = CheqiSDK.builder()
+        .apiKey("sk_hardcoded_key")
+        .build();
+    ```
+  </Accordion>
+
+  <Accordion title="Reuse SDK Instance">
+    ```java
+    // ✅ GOOD - Create once, reuse
+    @Configuration
+    public class CheqiConfig {
+        @Bean
+        public CheqiSDK cheqiSDK() {
+            return CheqiSDK.builder()
+                .apiEndpoint(Environment.PRODUCTION)
+                .apiKey(System.getenv("CHEQI_API_KEY"))
+                .build();
+        }
+    }
+    
+    // ❌ BAD - Creating new instance per request
+    public void sendReceipt() {
+        CheqiSDK sdk = CheqiSDK.builder().build();
+        // ...
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Handle All Result States">
+    ```java
+    ReceiptResult result = sdk.getReceiptService()
+        .processCompleteReceipt(customer, receipt);
+    
+    if (result.isSuccess()) {
+        // Receipt delivered to app
+        logSuccess(result.getCheqiReceiptId());
+    } else if (result.isDeliveredViaEmail()) {
+        // Receipt sent via email
+        logEmailDelivery(result.getEmailAddress());
+    } else if (result.isCustomerNotFound()) {
+        // Customer not found - prompt for email
+        promptForEmail();
+    } else {
+        // Error occurred
+        logError(result.getMessage());
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Validate Data Before Sending">
+    ```java
+    // Validate totals
+    BigDecimal calculatedTotal = products.stream()
+        .map(Product::getTotal)
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    
+    if (!calculatedTotal.equals(receipt.getTotalAmount())) {
+        throw new ValidationException("Total mismatch");
+    }
+    
+    // Validate required fields
+    if (receipt.getDocumentNumber() == null) {
+        throw new ValidationException("Document number required");
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Receipt Examples" icon="receipt" href="/receipts/examples">
+    See complete receipt examples
+  </Card>
+  <Card title="Error Reference" icon="triangle-exclamation" href="/sdk/errors">
+    Handle errors and exceptions
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Explore the complete API
+  </Card>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/cheqi-io/cheqi-sdk-java">
+    View source code and contribute
+  </Card>
+</CardGroup>

@@ -1,0 +1,582 @@
+---
+title: 'OAuth 2.0 Authentication'
+description: 'Implement OAuth 2.0 for third-party integrations and multi-merchant platforms'
+---
+
+## Overview
+
+OAuth 2.0 enables third-party applications to access Cheqi on behalf of merchants with their explicit authorization. This is ideal for POS systems, accounting software, and marketplace integrations serving multiple merchants.
+
+<Info>
+  OAuth 2.0 provides granular permission scopes and merchant-controlled authorization, making it the recommended choice for third-party platforms.
+</Info>
+
+## OAuth Flow
+
+Cheqi implements the **OAuth 2.0 Implicit Grant** flow:
+
+```mermaid
+sequenceDiagram
+    participant Merchant
+    participant YourApp as Your Application
+    participant Cheqi as Cheqi API
+    
+    YourApp->>Cheqi: 1. Redirect to /oauth2/authorize
+    Cheqi->>Merchant: 2. Show authorization page
+    Merchant->>Cheqi: 3. Approve/Deny access
+    Cheqi->>YourApp: 4. Redirect with authorization code
+    YourApp->>Cheqi: 5. Exchange code for tokens
+    Cheqi->>YourApp: 6. Return access & refresh tokens
+    YourApp->>Cheqi: 7. Make API calls with access token
+```
+
+## Getting Started
+
+<Note>
+  You must have an approved client application before merchants can authorize your integration. The approval process ensures security and quality for all Cheqi users.
+</Note>
+
+### 1. Create a Client Application
+
+Before implementing OAuth, you need to register your application in the Cheqi app:
+
+<Steps>
+  <Step title="Register Your Application">
+    In the Cheqi app:
+    1. Navigate to **Profile** → **Company Profile** → **Developer Tools** → **Client Applications**
+    2. Tap **Create New Client Application**
+    3. Fill in the details:
+       - **Application Name** - How merchants will see your app
+       - **Description** - What your integration does
+       - **Redirect URIs** - Where users return after authorization (one per line)
+       - **Scopes Required** - Permissions your app needs
+    4. Submit for review
+  </Step>
+  
+  <Step title="Wait for Approval">
+    Cheqi will review your application:
+    - Review typically takes 1-2 business days
+    - You'll receive a notification when status changes
+    - Check application status in **Client Applications** section
+    - Status will change from **Pending** to **Approved** or **Rejected**
+  </Step>
+  
+  <Step title="Generate Client Secret">
+    Once approved:
+    1. Go to **Client Applications** in the app
+    2. Select your approved application
+    3. Tap **Generate Client Secret**
+    4. **Copy the secret immediately** - it will only be shown once
+    
+    You now have:
+    - **Client ID** - Public identifier (visible in app)
+    - **Client Secret** - Secret key for token exchange (shown once)
+    - **Authorized Scopes** - Permissions granted to your app
+  </Step>
+  
+  <Step title="Configure Your Application">
+    Store credentials securely:
+    ```bash
+    CHEQI_CLIENT_ID=your_client_id
+    CHEQI_CLIENT_SECRET=your_client_secret  # Store securely!
+    CHEQI_REDIRECT_URI=https://yourapp.com/oauth/callback
+    ```
+    
+    <Warning>
+      The client secret is shown only once during generation. Store it securely immediately.
+    </Warning>
+  </Step>
+</Steps>
+
+<Info>
+  **Why approval is required:** Cheqi reviews client applications to ensure they meet security standards and provide value to merchants. This protects the ecosystem and maintains trust.
+</Info>
+
+### 2. Authorization Request
+
+Redirect merchants to Cheqi's authorization endpoint:
+
+```http
+GET https://api.cheqi.io/oauth2/authorize?
+  client_id=your_client_id&
+  redirect_uri=https://yourapp.com/oauth/callback&
+  scope=read_receipts write_receipts&
+  state=random_state_string
+```
+
+**Building the URL in your application:**
+```text
+// Construct authorization URL
+url = "https://api.cheqi.io/oauth2/authorize"
+params = {
+  client_id: "your_client_id",
+  redirect_uri: "https://yourapp.com/oauth/callback",
+  scope: "read_receipts write_receipts",
+  state: generateRandomState()  // CSRF protection
+}
+
+// Redirect user to authorization URL
+redirect(url + "?" + buildQueryString(params))
+```
+
+**What happens:**
+1. Your app redirects the merchant to `/oauth2/authorize`
+2. Cheqi displays the OAuth authorization web page with a `requestId`
+3. Merchant reviews and approves the authorization request on the web page
+4. After approval:
+   - Merchant sees a success screen
+   - Cheqi sends the authorization code to your configured `redirect_uri` (callback URL)
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `client_id` | Yes | Your application's client ID |
+| `redirect_uri` | Yes | Where to redirect after authorization (must match registered URI) |
+| `scope` | Yes | Space-separated list of requested scopes |
+| `state` | Recommended | Random string for CSRF protection |
+
+### 3. Merchant Approves on OAuth Web Page
+
+The merchant is redirected to Cheqi's OAuth authorization web page. **What they authorize depends on the requested scopes:**
+
+#### Scenario 1: Write Receipts (Company-Level Access)
+
+When requesting `write_receipts` scope, merchants authorize **company-level access**:
+
+1. Review your application details
+2. See requested scopes and permissions
+3. **Select which companies to authorize** (if they manage multiple companies)
+4. Approve or deny the request
+
+**Use case:** POS systems, accounting software that sends receipts on behalf of the merchant's company.
+
+#### Scenario 2: Read Receipts (Identifier Access)
+
+When requesting `read_receipts` scope, merchants authorize access to receipts created with those **identifiers**:
+
+1. Review your application details
+2. See requested scopes and permissions
+3. **Select which identifiers to authorize** (cards, payment accounts, or emails)
+4. Approve or deny the request
+
+**Use case:** Book keeping software, Expense Management Apps, Personal finance apps, expense trackers that read the user's receipts from their payment methods.
+
+<Note>
+  **Identifiers** are the methods used to match receipts to customers:
+  - **Cards** - Credit/debit card payment accounts
+  - **Payment Accounts** - Bank accounts (IBAN)
+  - **Emails** - Email addresses for receipt delivery
+</Note>
+
+<Info>
+  **Key difference:** `write_receipts` grants company-level permissions to send receipts. `read_receipts` grants access to individual identifiers and their associated receipts.
+</Info>
+
+**Behind the scenes:**
+- Cheqi creates an OAuth request with a unique `requestId`
+- The merchant reviews the request on the web page at `/oauth/authorize?requestId={requestId}`
+- Upon approval, Cheqi calls `/oauth2/approve/{requestId}` internally with either company IDs or identifier IDs
+- An authorization code is generated
+
+### 4. Handle Authorization Callback
+
+After the merchant approves, Cheqi sends a request to your `redirect_uri` (callback URL):
+
+```
+https://yourapp.com/oauth/callback?code=AUTH_CODE&state=RANDOM_STATE
+```
+
+**Callback Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `code` | Authorization code (exchange for tokens) |
+| `state` | The state value you provided (verify it matches) |
+
+**Example Handler:**
+
+```text
+// Handle OAuth callback
+function handleOAuthCallback(request) {
+  code = request.query.code
+  state = request.query.state
+  
+  // Verify state to prevent CSRF
+  if (state != session.oauthState) {
+    return error("Invalid state parameter")
+  }
+  
+  // Exchange code for tokens (see next step)
+  tokens = exchangeCodeForTokens(code)
+  
+  // Store tokens securely in your database
+  saveTokens(tokens)
+  
+  redirect("/dashboard")
+}
+```
+
+### 5. Exchange Code for Tokens
+
+Exchange the authorization code for access and refresh tokens:
+
+```bash
+curl -X POST https://api.cheqi.io/oauth2/token \
+  -H "Content-Type: application/json" \
+  -d '{
+    "grant_type": "authorization_code",
+    "code": "AUTH_CODE",
+    "client_id": "your_client_id",
+    "client_secret": "your_client_secret",
+    "redirect_uri": "https://yourapp.com/oauth/callback"
+  }'
+```
+
+**Response:**
+
+```json
+[
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "rt_1234567890abcdef1234567890abcdef",
+    "token_type": "AUTHORIZATION_CODE",
+    "expires_at": "2024-01-13T23:00:00Z",
+    "refresh_expires_at": "2024-02-13T22:00:00Z",
+    "merchant_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tax_id": "NL123456789B01",
+    "company_legal_name": "Example Coffee Shop B.V.",
+    "customer_id": null
+  }
+]
+```
+
+**Response Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `access_token` | Access token for API calls (expires in 1 hour) |
+| `refresh_token` | Token to get new access tokens (expires in 30 days) |
+| `token_type` | Grant type ("AUTHORIZATION_CODE") |
+| `expires_at` | When the access token expires (ISO 8601) |
+| `refresh_expires_at` | When the refresh token expires (ISO 8601) |
+| `merchant_id` | Company UUID this token is authorized for |
+| `tax_id` | Company tax identification number |
+| `company_legal_name` | Legal name of the company |
+| `customer_id` | Customer UUID (null for company-level tokens) |
+
+<Warning>
+  **Array response:** The response is an array because merchants can authorize access to multiple companies in a single flow. Store tokens separately for each `merchant_id`.
+</Warning>
+
+### 6. Use Access Tokens
+
+Include the access token in API requests:
+
+```bash
+curl https://api.cheqi.io/receipt/template \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+**SDK Usage:**
+
+```text
+// Initialize SDK without API key
+sdk = CheqiSDK(
+  environment: PRODUCTION
+)
+
+// Use access token for each request
+result = sdk.receipts.send(
+  customer: identificationDetails,
+  receipt: receiptRequest,
+  accessToken: accessToken  // Pass token here
+)
+```
+
+<Info>
+  See SDK-specific guides for implementation: [Java SDK](/sdk/java)
+</Info>
+
+## Token Management
+
+### Access Token Expiration
+
+Access tokens expire after **1 hour** (3600 seconds). Monitor the `expires_in` field and refresh before expiration.
+
+### Refresh Tokens
+
+Use refresh tokens to obtain new access tokens without re-authorization:
+
+```bash
+curl -X POST https://api.cheqi.io/oauth2/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "grant_type": "refresh_token",
+    "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "client_id": "your_client_id",
+    "client_secret": "your_client_secret"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "rt_9876543210fedcba9876543210fedcba",
+  "token_type": "AUTHORIZATION_CODE",
+  "expires_at": "2024-01-13T23:00:00Z",
+  "refresh_expires_at": "2024-02-13T22:00:00Z",
+  "merchant_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tax_id": "NL123456789B01",
+  "company_legal_name": "Example Coffee Shop B.V.",
+  "customer_id": null
+}
+```
+
+<Info>
+  **New tokens:** Both the access token AND refresh token are replaced when you refresh. Always store the new refresh token.
+</Info>
+
+### Token Refresh Strategy
+
+```text
+class TokenManager {
+  function getValidToken(companyId) {
+    tokens = loadTokens(companyId)
+    
+    // Check if token expires in next 5 minutes
+    if (isExpiringSoon(tokens.expires_at)) {
+      return refreshToken(tokens.refresh_token)
+    }
+    
+    return tokens.access_token
+  }
+  
+  function isExpiringSoon(expiresAt) {
+    fiveMinutes = 5 * 60 * 1000  // 5 minutes in milliseconds
+    return currentTime() + fiveMinutes >= expiresAt
+  }
+  
+  function refreshToken(refreshToken) {
+    response = httpPost('https://api.cheqi.io/oauth2/refresh', {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: getEnv('CHEQI_CLIENT_ID'),
+      client_secret: getEnv('CHEQI_CLIENT_SECRET')
+    })
+    
+    tokens = response.json()
+    saveTokens(tokens)
+    return tokens.access_token
+  }
+}
+```
+
+## Available Scopes
+
+Request only the scopes your application needs:
+
+| Scope | Authorization Level | Description |
+|-------|---------------------|-------------|
+| `write_receipts` | **Company** | Send receipts to customers on behalf of the company |
+| `read_receipts` | **Identifier** | Read receipt data from authorized identifiers (cards, payment accounts, emails) |
+| `read_stores` | **Company** | List store locations for authorized companies |
+| `write_stores` | **Company** | Create and manage stores for authorized companies |
+| `company_access` | **Company** | Access company-level information and features |
+| `account_access` | **Identifier** | Access user account information and settings |
+
+<Note>
+  **Company-level scopes** (`write_receipts`, `read_stores`, `write_stores`, `company_access`) require the merchant to authorize specific companies.
+  
+  **Identifier-level scopes** (`read_receipts`, `account_access`) require the merchant to authorize specific identifiers:
+  - **Cards** - Credit/debit card payment accounts
+  - **Payment Accounts** - Bank accounts (IBAN)
+  - **Emails** - Email addresses
+</Note>
+
+**Example:**
+
+```text
+// Company-level access (POS system)
+scope = "write_receipts read_stores"
+// Merchant selects which companies to authorize
+
+// Identifier access (expense tracker)
+scope = "read_receipts account_access"
+// Merchant selects which identifiers to authorize (cards, payment accounts, emails)
+```
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Protect Client Secret">
+    <Warning>
+      Never expose your client secret in client-side code or version control.
+    </Warning>
+    
+    ```javascript
+    // ❌ BAD - Client secret in frontend
+    const clientSecret = 'your_client_secret';
+    
+    // ✅ GOOD - Client secret on backend only
+    const clientSecret = process.env.CHEQI_CLIENT_SECRET;
+    ```
+  </Accordion>
+
+  <Accordion title="Validate State Parameter">
+    Always verify the `state` parameter to prevent CSRF attacks:
+    
+    ```javascript
+    // Generate random state before redirect
+    const state = crypto.randomBytes(32).toString('hex');
+    req.session.oauthState = state;
+    
+    // Verify state in callback
+    if (req.query.state !== req.session.oauthState) {
+      throw new Error('Invalid state parameter');
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Store Tokens Securely">
+    - Encrypt tokens at rest
+    - Use secure session storage
+    - Never log tokens
+    - Implement token rotation
+    
+    ```javascript
+    // Encrypt before storing
+    const encryptedToken = encrypt(accessToken, encryptionKey);
+    await db.tokens.create({
+      companyId,
+      accessToken: encryptedToken,
+      expiresAt: Date.now() + (expiresIn * 1000)
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Handle Token Expiration">
+    Implement automatic token refresh:
+    
+    ```javascript
+    async function makeAuthenticatedRequest(url, options) {
+      let token = await getValidToken();
+      
+      let response = await fetch(url, {
+        ...options,
+        headers: {
+          ...options.headers,
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      // If 401, refresh and retry once
+      if (response.status === 401) {
+        token = await refreshToken();
+        response = await fetch(url, {
+          ...options,
+          headers: {
+            ...options.headers,
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      }
+      
+      return response;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Multi-Company Support
+
+Merchants can authorize access to multiple companies:
+
+```javascript
+// Token exchange returns array of tokens
+const tokens = await exchangeCodeForTokens(code);
+
+// Store tokens per company
+for (const token of tokens) {
+  await saveTokens(token.company_id, {
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+    expires_at: Date.now() + (token.expires_in * 1000),
+    scope: token.scope
+  });
+}
+
+// Use appropriate token for each company
+const token = await getTokenForCompany(companyId);
+```
+
+## Error Handling
+
+### Authorization Errors
+
+| Error | Description | Solution |
+|-------|-------------|----------|
+| `access_denied` | User denied authorization | Show friendly message, allow retry |
+| `invalid_client` | Invalid client ID or secret | Verify credentials |
+| `invalid_scope` | Requested scope not allowed | Request only authorized scopes |
+| `invalid_grant` | Invalid or expired authorization code | Restart OAuth flow |
+
+### Token Errors
+
+| Status Code | Error | Solution |
+|-------------|-------|----------|
+| `401` | Invalid or expired token | Refresh token or re-authorize |
+| `403` | Insufficient scope | Request additional scopes |
+| `429` | Rate limit exceeded | Implement backoff and retry |
+
+**Example Error Response:**
+
+```json
+{
+  "error": "invalid_grant",
+  "error_description": "The authorization code has expired",
+  "timestamp": "2024-01-13T21:00:00Z"
+}
+```
+
+## Testing
+
+### Sandbox Environment
+
+Test OAuth flow in sandbox:
+
+```javascript
+const authUrl = new URL('https://sandbox.api.cheqi.io/oauth2/authorize');
+authUrl.searchParams.append('client_id', 'sandbox_client_id');
+authUrl.searchParams.append('redirect_uri', 'http://localhost:3000/callback');
+authUrl.searchParams.append('scope', 'read_receipts write_receipts');
+```
+
+### Token Validation
+
+Verify tokens are valid:
+
+```bash
+curl https://api.cheqi.io/oauth2/token/validate \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Response:**
+```json
+true
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Receipt Flow" icon="receipt" href="/receipts/overview">
+    Learn how to send receipts with OAuth tokens
+  </Card>
+  <Card title="Webhook Integration" icon="webhook" href="/webhooks/overview">
+    Receive real-time updates via webhooks
+  </Card>
+</CardGroup>

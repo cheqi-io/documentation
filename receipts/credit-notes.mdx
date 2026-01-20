@@ -1,0 +1,502 @@
+---
+title: 'Credit Notes & Returns'
+description: 'Handle customer returns and refunds with encrypted credit notes'
+---
+
+## Overview
+
+Cheqi's credit note system enables customers to initiate returns directly from their digital receipts in the app. When a customer requests a return, **Cheqi sends an encrypted webhook to your system** with the return details. You decrypt it, validate the return, and send back an encrypted credit note - all handled automatically by the SDK.
+
+**Complete return workflow:**
+- 🔐 **Encrypted webhooks** - Customer return requests sent securely to your endpoint
+- ✅ **SDK decryption** - Decrypt return requests with your private key
+- 🔄 **Automatic processing** - Validate and create credit notes
+- 📧 **Delivery** - Credit notes delivered back to customer's app
+- 📥 **Polling option** - Fetch pending credit note requests if webhooks aren't available
+- 🌍 **Country compliance** - We ensure credit notes meet local regulations based on where the receipt was issued
+
+## How It Works
+
+```mermaid
+sequenceDiagram
+    participant Customer as Customer's App
+    participant Cheqi as Cheqi API
+    participant Merchant as Your System
+    
+    Customer->>Cheqi: 1. Request return from receipt
+    Cheqi->>Merchant: 2. Webhook: Encrypted return request
+    Merchant->>Merchant: 3. Decrypt with private key
+    Merchant->>Merchant: 4. Validate return against order
+    Merchant->>Merchant: 5. Create credit note (negative amounts)
+    Merchant->>Cheqi: 6. Send encrypted credit note
+    Cheqi->>Customer: 7. Deliver credit note to app
+```
+
+## Prerequisites
+
+### 1. Register Webhook Endpoint
+
+You must configure a webhook endpoint where Cheqi can send credit note requests:
+
+```bash
+curl -X POST https://api.cheqi.io/company/{companyId}/webhook \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webhookNotificationUrl": "https://yourapp.com/webhooks/cheqi"
+  }'
+```
+
+**Response:**
+```json
+{
+  "companyId": "550e8400-e29b-41d4-a716-446655440000",
+  "webhookNotificationUrl": "https://yourapp.com/webhooks/cheqi",
+  "webhookSecret": "whsec_1234567890abcdef...",
+  "createdAt": "2024-01-13T22:00:00Z"
+}
+```
+
+<Warning>
+  **Save the webhook secret!** It's shown only once and is used to verify webhook authenticity. Store it securely.
+</Warning>
+
+### 2. Implement Webhook Endpoint
+
+Create an endpoint to receive credit note requests from Cheqi:
+
+```java
+@RestController
+@RequestMapping("/webhooks")
+public class CheqiWebhookController {
+    private final CreditNoteService creditNoteService;
+    
+    @PostMapping("/cheqi")
+    public ResponseEntity<Map<String, Object>> handleCheqiWebhook(
+            @RequestBody WebhookEventDTO webhookEvent) {
+        
+        // Verify webhook signature (recommended)
+        // verifyWebhookSignature(request);
+        
+        if (webhookEvent.getEvent() == WebhookEventType.RETURN_REQUESTED) {
+            Map<String, Object> result = creditNoteService.processCreditNoteRequest(
+                webhookEvent.getEncryptedCreditNoteInitiationRequest()
+            );
+            
+            boolean success = (boolean) result.get("success");
+            if (success) {
+                return ResponseEntity.ok(result);
+            } else {
+                return ResponseEntity.badRequest().body(result);
+            }
+        }
+        
+        return ResponseEntity.badRequest().body(Map.of(
+            "success", false,
+            "message", "Unsupported event type"
+        ));
+    }
+}
+```
+
+**Webhook Event Structure:**
+
+```java
+public class WebhookEventDTO {
+    private UUID companyId;
+    private UUID userId;
+    private WebhookEventType event;  // RETURN_REQUESTED
+    private Instant createdAt;
+    private String receiptId;
+    private EncryptedCreditNoteInitiationRequest encryptedCreditNoteInitiationRequest;
+}
+```
+
+## Processing Credit Note Requests
+
+### 1. Decrypt the Return Request
+
+Use the SDK to decrypt the customer's return request:
+
+```java
+@Service
+public class CreditNoteService {
+    private final CheqiSDK cheqiSDK;
+    private final PrivateKey merchantPrivateKey;
+    
+    public Map<String, Object> processCreditNoteRequest(
+            EncryptedCreditNoteInitiationRequest encryptedRequest) {
+        
+        try {
+            // Decrypt the return request
+            CreditNoteInitiationRequest creditNoteRequest = cheqiSDK
+                .getCreditNoteService()
+                .decryptCreditNoteRequest(encryptedRequest, merchantPrivateKey);
+            
+            log.info("Return request - Reason: {}, Items: {}", 
+                creditNoteRequest.getReturnReason(),
+                creditNoteRequest.getLineItems().size());
+            
+            // Continue processing...
+        } catch (DecryptionException e) {
+            return Map.of(
+                "success", false,
+                "message", "Failed to decrypt: " + e.getMessage()
+            );
+        }
+    }
+}
+```
+
+**Decrypted Request Structure:**
+
+```java
+public class CreditNoteInitiationRequest {
+    private String cheqiReceiptId;           // Original receipt ID
+    private String receiptId;                // Your receipt/invoice number
+    private String returnReason;             // e.g., "DEFECTIVE", "WRONG_ITEM"
+    private String returnReasonDescription;  // Customer's explanation
+    private List<ReturnLineItem> lineItems;  // Items being returned
+}
+
+public class ReturnLineItem {
+    private String lineItemId;      // Line item ID from original receipt
+    private BigDecimal quantityReturned;  // How many units to return
+}
+```
+
+### 2. Validate the Return
+
+Validate the return request against your original order:
+
+```java
+// Find original order
+Order originalOrder = orderRepository.findByCheqiReceiptId(
+    creditNoteRequest.getCheqiReceiptId()
+);
+
+if (originalOrder == null) {
+    return Map.of(
+        "success", false,
+        "message", "Original receipt not found"
+    );
+}
+
+// Validate each line item
+for (ReturnLineItem returnItem : creditNoteRequest.getLineItems()) {
+    OrderLineItem originalLineItem = findLineItem(
+        originalOrder, 
+        returnItem.getLineItemId()
+    );
+    
+    if (originalLineItem == null) {
+        return Map.of(
+            "success", false,
+            "message", "Line item not found: " + returnItem.getLineItemId()
+        );
+    }
+    
+    // Check quantity doesn't exceed purchased amount
+    if (returnItem.getQuantityReturned().compareTo(originalLineItem.getQuantity()) > 0) {
+        return Map.of(
+            "success", false,
+            "message", "Return quantity exceeds purchased quantity"
+        );
+    }
+}
+```
+
+### 3. Create Credit Note Template
+
+Build a credit note with **negative amounts** (refunds):
+
+```java
+// Calculate refund amounts (negative values)
+List<Product> refundProducts = creditNoteRequest.getLineItems().stream()
+    .map(returnItem -> {
+        OrderLineItem originalItem = findLineItem(originalOrder, returnItem.getLineItemId());
+        
+        // Calculate proportional refund
+        BigDecimal proportion = returnItem.getQuantityReturned()
+            .divide(originalItem.getQuantity(), 10, RoundingMode.HALF_UP);
+        
+        BigDecimal refundSubtotal = originalItem.getSubtotal().multiply(proportion).negate();
+        BigDecimal refundTax = originalItem.getTaxAmount().multiply(proportion).negate();
+        BigDecimal refundTotal = originalItem.getTotal().multiply(proportion).negate();
+        
+        return Product.builder()
+            .name(originalItem.getProductName())
+            .quantity(returnItem.getQuantityReturned().doubleValue())
+            .unitPrice(originalItem.getUnitPrice().negate())  // Negative!
+            .subtotal(refundSubtotal)  // Negative!
+            .total(refundTotal)        // Negative!
+            .addTax(originalItem.getTaxRate(), "VAT", refundTax)  // Negative!
+            .build();
+    })
+    .collect(Collectors.toList());
+
+// Build credit note template
+CreditNoteTemplateRequest creditNote = CreditNoteTemplateRequest.builder()
+    .documentNumber("CN-" + UUID.randomUUID())
+    .issueDate(Instant.now())
+    .currency("EUR")
+    .originatorDocumentReference(originalOrder.getReceiptId())  // Link to original
+    .totalBeforeTax(calculateTotalBeforeTax(refundProducts))    // Negative!
+    .totalTaxAmount(calculateTotalTax(refundProducts))          // Negative!
+    .totalAmount(calculateTotal(refundProducts))                // Negative!
+    .products(refundProducts)
+    .taxes(calculateTaxes(refundProducts))
+    .note(creditNoteRequest.getReturnReasonDescription())
+    .build();
+```
+
+### 4. Send Credit Note to Customer
+
+Use the SDK to encrypt and send the credit note:
+
+```java
+// Identify customer using original receipt ID (no payment details needed!)
+IdentificationDetails customer = IdentificationDetails.builder()
+    .cheqiReceiptId(creditNoteRequest.getCheqiReceiptId())
+    .build();
+
+// Process and send credit note
+CreditNoteResult result = cheqiSDK.getCreditNoteService()
+    .processCompleteCreditNote(customer, creditNote);
+
+if (result.isSuccess()) {
+    log.info("✅ Credit note delivered: {}", result.getCheqiReceiptId());
+    return Map.of(
+        "success", true,
+        "message", "Credit note processed successfully",
+        "creditNoteId", result.getCheqiReceiptId()
+    );
+} else if (result.isCustomerNotFound()) {
+    return Map.of(
+        "success", false,
+        "customerNotFound", true,
+        "message", result.getMessage()
+    );
+}
+```
+
+<Info>
+  **Customer identification:** Credit notes use the `cheqiReceiptId` from the original receipt to identify the customer. No payment details (card PAR, IBAN) are needed - the receipt ID automatically resolves to the correct customer.
+</Info>
+
+## Alternative: Polling for Credit Note Requests
+
+If you can't use webhooks, you can poll for pending credit note requests:
+
+### Fetch Pending Requests
+
+```bash
+# With API Key
+curl https://api.cheqi.io/credit-note \
+  -H "Authorization: Bearer sk_1234567890abcdef1234567890abcdef"
+
+# With OAuth Token
+curl https://api.cheqi.io/credit-note \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Response:**
+
+```json
+[
+  {
+    "encryptedCreditNoteInitiationRequest": {
+      "encryptedData": "base64-encrypted-data...",
+      "encryptedKey": "base64-encrypted-aes-key...",
+      "iv": "base64-iv..."
+    },
+    "createdAt": "2024-01-13T22:00:00Z",
+    "cheqiReceiptId": "550e8400-e29b-41d4-a716-446655440000"
+  }
+]
+```
+
+### Process Polled Requests
+
+```java
+// Fetch pending credit note requests
+List<EncryptedCreditNoteDto> pendingRequests = cheqiSDK.getCreditNoteService()
+    .getPendingCreditNoteRequests();
+
+for (EncryptedCreditNoteDto encryptedRequest : pendingRequests) {
+    // Decrypt and process
+    CreditNoteInitiationRequest request = cheqiSDK.getCreditNoteService()
+        .decryptCreditNoteRequest(
+            encryptedRequest.getEncryptedCreditNoteInitiationRequest(),
+            merchantPrivateKey
+        );
+    
+    // Validate and create credit note (same as webhook flow)
+    processCreditNoteRequest(request);
+}
+```
+
+<Note>
+  **Polling frequency:** Poll every 5-15 minutes to ensure timely processing of customer returns. Webhooks are recommended for real-time processing.
+</Note>
+
+## Complete Example
+
+Here's a complete working example from the test-app:
+
+```java
+@Service
+public class CreditNoteService {
+    private final CheqiSDK cheqiSDK;
+    private final OrderRepository orderRepository;
+    private final PrivateKey merchantPrivateKey;
+    
+    public Map<String, Object> processCreditNoteRequest(
+            EncryptedCreditNoteInitiationRequest encryptedRequest) {
+        
+        try {
+            // 1. Decrypt the return request
+            CreditNoteInitiationRequest creditNoteRequest = cheqiSDK
+                .getCreditNoteService()
+                .decryptCreditNoteRequest(encryptedRequest, merchantPrivateKey);
+            
+            // 2. Find original order
+            Order originalOrder = orderRepository.findByCheqiReceiptId(
+                creditNoteRequest.getCheqiReceiptId()
+            );
+            
+            if (originalOrder == null) {
+                return Map.of("success", false, "message", "Order not found");
+            }
+            
+            // 3. Validate return request
+            String validationError = validateReturnRequest(creditNoteRequest, originalOrder);
+            if (validationError != null) {
+                return Map.of("success", false, "message", validationError);
+            }
+            
+            // 4. Create credit note template
+            CreditNoteTemplateRequest creditNote = createCreditNoteFromOrder(
+                creditNoteRequest,
+                originalOrder
+            );
+            
+            // 5. Identify customer (using receipt ID only)
+            IdentificationDetails customer = IdentificationDetails.builder()
+                .cheqiReceiptId(creditNoteRequest.getCheqiReceiptId())
+                .build();
+            
+            // 6. Send credit note
+            CreditNoteResult result = cheqiSDK.getCreditNoteService()
+                .processCompleteCreditNote(customer, creditNote);
+            
+            if (result.isSuccess()) {
+                return Map.of(
+                    "success", true,
+                    "message", "Credit note processed",
+                    "creditNoteId", result.getCheqiReceiptId()
+                );
+            } else if (result.isCustomerNotFound()) {
+                return Map.of(
+                    "success", false,
+                    "customerNotFound", true,
+                    "message", result.getMessage()
+                );
+            }
+            
+            return Map.of("success", false, "message", "Unknown error");
+            
+        } catch (DecryptionException e) {
+            return Map.of("success", false, "message", "Decryption failed: " + e.getMessage());
+        } catch (CheqiSDKException e) {
+            return Map.of("success", false, "message", "SDK error: " + e.getMessage());
+        }
+    }
+}
+```
+
+## Webhook Security
+
+### Verify Webhook Signatures
+
+Cheqi signs all webhooks with your webhook secret. Verify the signature to ensure authenticity:
+
+```java
+public boolean verifyWebhookSignature(
+        HttpServletRequest request,
+        String webhookSecret) throws IOException {
+    
+    String signature = request.getHeader("X-Cheqi-Signature");
+    String body = request.getReader().lines().collect(Collectors.joining());
+    
+    // Compute HMAC-SHA256
+    Mac mac = Mac.getInstance("HmacSHA256");
+    SecretKeySpec secretKey = new SecretKeySpec(
+        webhookSecret.getBytes(StandardCharsets.UTF_8),
+        "HmacSHA256"
+    );
+    mac.init(secretKey);
+    
+    byte[] hash = mac.doFinal(body.getBytes(StandardCharsets.UTF_8));
+    String computed = Base64.getEncoder().encodeToString(hash);
+    
+    return MessageDigest.isEqual(
+        signature.getBytes(StandardCharsets.UTF_8),
+        computed.getBytes(StandardCharsets.UTF_8)
+    );
+}
+```
+
+### Rotate Webhook Secret
+
+If your webhook secret is compromised, rotate it:
+
+```bash
+curl -X POST https://api.cheqi.io/company/{companyId}/webhook/rotate-secret \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+**Response:**
+```json
+{
+  "companyId": "550e8400-e29b-41d4-a716-446655440000",
+  "webhookSecret": "whsec_new_secret_here...",
+  "rotatedAt": "2024-01-13T22:00:00Z"
+}
+```
+
+## Best Practices
+
+### ✅ Do's
+
+- **Verify webhook signatures** - Always validate the `X-Cheqi-Signature` header
+- **Respond quickly** - Return 200 OK within 5 seconds, process asynchronously if needed
+- **Validate returns** - Check quantities, item IDs, and business rules
+- **Use negative amounts** - Credit notes must have negative values for refunds
+- **Store webhook secret securely** - Treat it like an API key
+- **Handle idempotency** - Same return request may be sent multiple times
+
+### ❌ Don'ts
+
+- **Don't expose webhook endpoint publicly** - Use authentication or IP whitelisting
+- **Don't process synchronously** - Queue webhook processing to avoid timeouts
+- **Don't skip validation** - Always validate against original order
+- **Don't use payment details** - Use `cheqiReceiptId` for customer identification
+- **Don't hardcode secrets** - Use environment variables
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Receipt Flow" icon="receipt" href="/receipts/overview">
+    Learn how to send digital receipts
+  </Card>
+  <Card title="Java SDK" icon="code" href="/sdk/java">
+    Complete SDK documentation
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Full API endpoint documentation
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/webhooks">
+    Webhook events and security
+  </Card>
+</CardGroup>

@@ -1,0 +1,60 @@
+---
+title: 'Authentication Overview'
+description: 'Learn about the two authentication methods available for integrating with Cheqi'
+---
+
+## Authentication Methods
+
+Cheqi provides two authentication methods to suit different integration scenarios:
+
+<CardGroup cols={2}>
+  <Card title="API Keys" icon="key" href="/authentication/api-keys">
+    Direct company access for merchants managing their own receipts
+  </Card>
+  <Card title="OAuth 2.0" icon="shield-halved" href="/authentication/oauth">
+    Third-party access for POS systems and integrators
+  </Card>
+</CardGroup>
+
+## Choosing the Right Method
+
+### Use API Keys When:
+
+- ✅ You are the **merchant** integrating your own POS system
+- ✅ You need to **send receipts** from your own systems
+- ✅ You manage **multiple store locations** or a **franchise organization**
+
+**Examples:** 
+- A restaurant owner integrating their own POS system to send digital receipts
+- A franchise organization like Domino's managing receipts for all franchise locations from a centralized system
+
+### Use OAuth 2.0 When:
+
+- ✅ You are a **third-party** building an integration for multiple merchants
+- ✅ You want merchants to **authorize your application** to start issuing receipts for them
+- ✅ You are building a **POS system, accounting software, or marketplace integration**
+
+**Example:** A POS system provider offering Cheqi integration to all their customers.
+
+## Security Comparison
+
+| Feature | API Keys | OAuth 2.0 |
+|---------|----------|-----------|
+| **Setup Complexity** | Simple | Moderate |
+| **Access Scope** | Full company + child stores | Granular scopes per company |
+| **Multi-Store Support** | Yes (parent + all child stores) | Yes (per authorized company) |
+| **User Authorization** | Not required | Required per merchant |
+| **Token Expiration** | Never (until revoked) | Access tokens expire |
+| **Refresh Tokens** | N/A | Yes |
+| **Best For** | Direct merchant integration, franchises | Third-party platforms |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Get Started with API Keys" icon="rocket" href="/authentication/api-keys">
+    Generate your first API key in minutes
+  </Card>
+  <Card title="Implement OAuth 2.0" icon="code" href="/authentication/oauth">
+    Build a third-party integration
+  </Card>
+</CardGroup>

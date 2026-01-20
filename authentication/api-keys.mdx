@@ -1,0 +1,297 @@
+---
+title: 'API Key Authentication'
+description: 'Generate and use API keys for direct company access'
+---
+
+## Overview
+
+API Keys provide a simple authentication method for merchants to integrate their own systems with Cheqi. Each API key is scoped to a single company and provides full access to that company's resources, including any child stores registered within Cheqi.
+
+**Perfect for:**
+- Direct POS system integration
+- Franchise organizations managing multiple locations (e.g., Domino's managing all franchise stores)
+- Companies with multiple store locations under one parent company
+
+<Warning>
+  API keys provide full access to your company data and all child stores. Keep them secure and never commit them to version control.
+</Warning>
+
+## Generating an API Key
+
+### Via the Cheqi Mobile App
+
+1. Open the **Cheqi app** on your device
+2. Navigate to **Profile** → **Company Profile**
+3. Select **Developer Tools** → **API Keys**
+4. Tap **Create New API Key**
+5. Enter a **descriptive name** (e.g., "Production POS System")
+6. **Copy the key immediately** - it will only be shown once
+
+<Info>
+  The API key is displayed only once during creation. Store it securely in your application's configuration.
+</Info>
+
+### Key Format
+
+API keys follow this format:
+
+```
+sk_1234567890abcdef1234567890abcdef
+```
+
+- **Prefix:** `sk_` (Cheqi Secret Key)
+- **Key:** 32-character alphanumeric string
+
+## Using API Keys
+
+### Authentication Header
+
+Include your API key in the `Authorization` header with the `Bearer` scheme:
+
+```bash
+curl https://api.cheqi.io/receipt/template \
+  -H "Authorization: Bearer sk_1234567890abcdef1234567890abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+### SDK Configuration
+
+Configure your SDK with the API key:
+
+<CodeGroup>
+```bash HTTP
+curl https://api.cheqi.io/receipt/complete \
+  -H "Authorization: Bearer sk_1234567890abcdef1234567890abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+```text Conceptual
+// Initialize SDK with API key
+sdk = CheqiSDK(
+  environment: PRODUCTION,
+  apiKey: "sk_1234567890abcdef1234567890abcdef"
+)
+
+// Use SDK to send receipts
+result = sdk.receipts.send(customer, receipt)
+```
+</CodeGroup>
+
+<Info>
+  See SDK-specific guides for implementation details: [Java SDK](/sdk/java)
+</Info>
+
+### Secure Storage
+
+<Warning>
+  **Never hardcode API keys** in your source code or commit them to version control. Always use secure configuration management.
+</Warning>
+
+**Recommended approaches:**
+- Environment variables
+- Secure configuration files (excluded from version control)
+- Secret management services (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault)
+- Encrypted configuration stores
+
+## API Key Scopes
+
+API keys automatically have the following scopes:
+
+- ✅ **Write Receipts** - Send receipts to customers for your company and all child stores
+- ✅ **Read Receipts** - Query receipt data across your company and child stores
+- ✅ **Write Stores** - Manage child stores (e.g., franchise locations)
+- ✅ **Read Stores** - Access child store data
+- ✅ **Company Data** - Access company information
+
+<Note>
+  API keys are scoped to your company and its child stores. You cannot access data from companies outside your organizational structure.
+</Note>
+
+### Franchise & Multi-Store Example
+
+If you're a franchise organization like Domino's with a centralized POS system:
+
+```json
+// Parent company API key can send receipts for any child store
+POST /receipt/complete
+Authorization: Bearer sk_parent_company_key
+
+{
+  "documentNumber": "INV-001",
+  "storeId": "child-store-uuid",  // Specify which franchise location
+  "currency": "EUR",
+  "totalAmount": "25.50",
+  // ... rest of receipt data
+}
+```
+
+**Benefits for Franchises:**
+- One API key for all locations
+- Centralized receipt management
+- Consistent customer experience across all stores
+- Simplified integration and maintenance of the company structure.
+
+## Managing API Keys
+
+### Listing Active Keys
+
+View all API keys for your company in the Cheqi app:
+
+**Profile** → **Company Profile** → **Developer Tools** → **API Keys**
+
+Each key shows:
+- **Name** - Descriptive label you provided
+- **Key Prefix** - First 8 characters (e.g., `sk_12345...`)
+- **Created** - When the key was generated
+- **Last Used** - Most recent API call timestamp
+- **Status** - Active or Revoked
+
+### Revoking API Keys
+
+Revoke a key immediately if:
+- ❌ The key was accidentally exposed
+- ❌ An employee with access left the company
+- ❌ You're rotating keys for security
+- ❌ The integration is no longer in use
+
+**To revoke:**
+1. Go to **API Keys** in the app
+2. Select the key to revoke
+3. Tap **Revoke Key**
+4. Confirm the action
+
+<Warning>
+  Revoking a key is immediate and irreversible. All API calls using that key will fail with `401 Unauthorized`.
+</Warning>
+
+## Best Practices
+
+### Security
+
+<AccordionGroup>
+  <Accordion title="Never Hardcode API Keys">
+    ```text
+    // ❌ BAD - Hardcoded key
+    sdk = CheqiSDK(
+      apiKey: "sk_1234567890abcdef1234567890abcdef"
+    )
+
+    // ✅ GOOD - Environment variable
+    sdk = CheqiSDK(
+      apiKey: getEnvironmentVariable("CHEQI_API_KEY")
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Use Different Keys for Different Environments">
+    ```bash
+    # Development
+    CHEQI_API_KEY=sk_dev1234567890abcdef
+
+    # Staging
+    CHEQI_API_KEY=sk_staging1234567890abcdef
+
+    # Production
+    CHEQI_API_KEY=sk_prod1234567890abcdef
+    ```
+  </Accordion>
+
+  <Accordion title="Rotate Keys Regularly">
+    1. Generate a new API key
+    2. Update your application configuration
+    3. Deploy the update
+    4. Verify the new key works
+    5. Revoke the old key
+  </Accordion>
+
+  <Accordion title="Monitor Key Usage">
+    Regularly check the **Last Used** timestamp in the app to detect:
+    - Unused keys that should be revoked
+    - Unexpected usage patterns
+    - Keys that may have been compromised
+  </Accordion>
+</AccordionGroup>
+
+### Key Naming
+
+Use descriptive names that indicate:
+- **Environment:** Production, Staging, Development
+- **System:** POS System, Webshop, Mobile App
+- **Location:** Store 1, Store 2, Warehouse
+
+**Examples:**
+- `Production POS - Store Amsterdam`
+- `Staging Webshop Integration`
+- `Development Testing Key`
+
+## Error Handling
+
+### Common Errors
+
+| Status Code | Error | Solution |
+|-------------|-------|----------|
+| `401` | Invalid API key | Verify the key is correct and not revoked |
+| `401` | API key revoked | Generate a new key and update your configuration |
+| `403` | Insufficient permissions | API keys have full company access - check company ownership |
+| `429` | Rate limit exceeded | Implement exponential backoff and retry logic |
+
+### Example Error Response
+
+```json
+{
+  "error": "unauthorized",
+  "message": "Invalid or revoked API key",
+  "timestamp": "2024-01-13T21:00:00Z"
+}
+```
+
+## Testing
+
+### Test Environment
+
+Use test API keys for development:
+
+```bash
+# Set environment to TEST or SANDBOX
+CHEQI_ENVIRONMENT=sandbox
+CHEQI_API_KEY=sk_test_1234567890abcdef
+```
+
+**SDK Configuration:**
+```text
+sdk = CheqiSDK(
+  environment: SANDBOX,  // or TEST
+  apiKey: getEnvironmentVariable("CHEQI_API_KEY")
+)
+```
+
+### Verify API Key
+
+Test your API key with a simple request:
+
+```bash
+curl https://api.cheqi.io/company/{companyId}/public \
+  -H "Authorization: Bearer sk_1234567890abcdef1234567890abcdef"
+```
+
+Expected response:
+```json
+{
+  "id": "uuid",
+  "companyName": "Your Company Name",
+  "companyEmail": "info@yourcompany.com"
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Receipt Flow" icon="receipt" href="/receipts/overview">
+    Learn how to send receipts using your API key
+  </Card>
+  <Card title="Java SDK" icon="java" href="/sdk/java">
+    Java SDK implementation guide
+  </Card>
+</CardGroup>

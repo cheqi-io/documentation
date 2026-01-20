@@ -1,97 +1,382 @@
 ---
 title: 'Quickstart'
-description: 'Start building awesome documentation in under 5 minutes'
+description: 'Send your first digital receipt in 5 minutes'
 ---
 
-## Setup your development
+This guide will walk you through sending your first digital receipt with Cheqi. We'll cover the general flow first, then you can jump to your preferred language for implementation.
 
-Learn how to update your docs locally and deploy them to the public.
-
-### Edit and preview
+## Before You Begin
 
 <AccordionGroup>
-  <Accordion icon="github" title="Clone your docs locally">
-    During the onboarding process, we created a repository on your Github with
-    your docs content. You can find this repository on our
-    [dashboard](https://dashboard.mintlify.com). To clone the repository
-    locally, follow these
-    [instructions](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository)
-    in your terminal.
+  <Accordion title="Prerequisites Checklist">
+    - ✅ **Cheqi Account** - Download the Cheqi app and create a company account
+    - ✅ **API Key** - Generate from **Profile** → **Company Profile** → **Developer Tools** → **API Keys**
+    - ✅ **Development Environment** - Choose your SDK:
+      - Java 11+ (Maven or Gradle)
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Preview changes">
-    Previewing helps you make sure your changes look as intended. We built a
-    command line interface to render these changes locally. 
-    1. Install the
-    [Mintlify CLI](https://www.npmjs.com/package/mintlify) to preview the
-    documentation changes locally with this command: ``` npm i -g mintlify ```
-    2. Run the following command at the root of your documentation (where
-    `docs.json` is): ``` mintlify dev ```
-    <Note>
-      If you’re currently using the legacy ```mint.json``` configuration file, please update the Mintlify CLI:
-
-
-      ```npm i -g mintlify@latest```
-      And run the new upgrade command in your docs repository:
-
-      ```mintlify upgrade```
-      You should now be using the new ```docs.json``` configuration file. Feel free to delete the ```mint.json``` file from your repository.
-    </Note>
+  
+  <Accordion title="Get Sandbox Credentials">
+    **For Testing:**
+    1. Use the same API key from your account
+    2. Set environment to `SANDBOX` in your SDK configuration
+    3. Sandbox automatically handles test data and doesn't send real receipts
+    
+    **Test Customer Data:**
+    - Test PAR: `PAR34321234567890`
+    - Test IBAN: `NL91ABNA0417164300`
+    - Test Email: `test@example.com`
+  </Accordion>
+  
+  <Accordion title="Expected Response Times">
+    - **Customer Matching**: < 100ms
+    - **Receipt Template Generation**: < 200ms
+    - **Receipt Encryption & Delivery**: < 500ms
+    - **Total End-to-End**: < 1 second
+    
+    **Success Indicators:**
+    - ✅ `result.isSuccess() == true`
+    - ✅ Receipt count > 0 (number of devices delivered to)
+    - ✅ No exceptions thrown
   </Accordion>
 </AccordionGroup>
 
-### Deploy your changes
+## The Receipt Flow (Language-Agnostic)
+
+Regardless of which SDK you use, sending a receipt follows these steps:
+
+<Steps>
+  <Step title="Initialize SDK">
+    Configure the SDK with your API key and environment (sandbox/production).
+  </Step>
+  
+  <Step title="Identify Customer">
+    Provide payment details from your POS:
+    - **Card Payment**: Payment Account Reference (PAR) + Card Provider
+    - **Bank Transfer**: IBAN
+    - **Fallback**: Email address (for non-Cheqi users)
+  </Step>
+  
+  <Step title="Build Receipt Data">
+    Structure your receipt with:
+    - Document number (invoice/receipt ID)
+    - Issue date
+    - Currency
+    - Line items (products/services)
+    - Tax breakdown
+    - Total amounts
+  </Step>
+  
+  <Step title="Send Receipt">
+    Call the SDK's receipt processing method. The SDK handles:
+    - Customer matching
+    - UBL template generation
+    - End-to-end encryption
+    - Multi-device delivery
+    - Email fallback (if needed)
+  </Step>
+  
+  <Step title="Handle Response">
+    Check the result:
+    - **Success**: Receipt delivered to customer's devices
+    - **Customer Not Found**: Prompt for email or handle as needed
+    - **Error**: Log and retry with exponential backoff
+  </Step>
+</Steps>
+
+## Implementation by Language
+
+Choose your SDK for detailed implementation:
+
+<CardGroup cols={2}>
+  <Card title="Java SDK" icon="java" href="/sdk/java">
+    Complete guide for Java 11+ with Maven/Gradle
+  </Card>
+  <Card title=".NET SDK" icon="microsoft" href="/sdk/dotnet">
+    Coming soon - C# and .NET 6+
+  </Card>
+  <Card title="Node.js SDK" icon="node-js" href="/sdk/nodejs">
+    Coming soon - JavaScript/TypeScript
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdk/python">
+    Coming soon - Python 3.8+
+  </Card>
+</CardGroup>
+
+## Quick Example (Java)
+
+Here's a complete example using the Java SDK. For other languages, see the SDK-specific guides above.
+
+### 1. Install SDK
+
+<Tabs>
+  <Tab title="Maven">
+    ```xml
+    <dependency>
+        <groupId>io.cheqi</groupId>
+        <artifactId>cheqi-sdk</artifactId>
+        <version>1.0.3</version>
+    </dependency>
+    ```
+  </Tab>
+  
+  <Tab title="Gradle">
+    ```gradle
+    implementation 'io.cheqi:cheqi-sdk:1.0.3'
+    ```
+  </Tab>
+</Tabs>
+
+### 2. Initialize SDK
+
+```java
+import com.cheqi.sdk.CheqiSDK;
+import com.cheqi.sdk.config.Environment;
+
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.SANDBOX)  // Use SANDBOX for testing
+    .apiKey(System.getenv("CHEQI_API_KEY"))
+    .build();
+```
+
+<Warning>
+  Store your API key in environment variables, never hardcode it!
+</Warning>
+
+### 3. Identify Customer
+
+```java
+import com.cheqi.sdk.models.*;
+import com.cheqi.commons.enums.CardProvider;
+
+IdentificationDetails customer = IdentificationDetails.builder()
+    .paymentType(PaymentType.CARD_PAYMENT)
+    .cardDetails(CardDetails.builder()
+        .paymentAccountReference("PAR123456789")  // From payment terminal
+        .cardProvider(CardProvider.VISA)
+        .build())
+    .customerEmail("customer@example.com")  // Optional fallback
+    .build();
+```
+
+<Info>
+  **Payment Account Reference (PAR)** is provided by modern payment terminals. It's a privacy-friendly way to identify customers without storing card numbers.
+</Info>
+
+### 4. Build Receipt
+
+```java
+import java.math.BigDecimal;
+import java.time.Instant;
+
+ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+    .documentNumber("INV-2024-001")
+    .issueDate(Instant.now())
+    .currency("EUR")
+    .totalAmount(new BigDecimal("12.10"))
+    .totalTaxAmount(new BigDecimal("2.10"))
+    
+    // Add products
+    .addProduct(Product.builder()
+        .name("Espresso")
+        .quantity(2.0)
+        .unitCode(UnitCode.ONE)
+        .unitPrice("5.00")
+        .subtotal("10.00")
+        .total("12.10")
+        .addTax(21.0, "VAT", "2.10")
+        .build())
+    
+    // Add tax breakdown
+    .addTax(Tax.builder()
+        .rate(21.0)
+        .type("VAT")
+        .taxableAmount("10.00")
+        .amount("2.10")
+        .label("VAT 21%")
+        .build())
+    
+    .build();
+```
+
+### 5. Send Receipt
+
+```java
+import com.cheqi.sdk.receipt.ReceiptResult;
+
+ReceiptResult result = sdk.getReceiptService()
+    .processCompleteReceipt(customer, receipt);
+
+if (result.isSuccess()) {
+    System.out.println("✅ Receipt delivered to " + result.getReceiptCount() + " devices");
+    System.out.println("Receipt ID: " + result.getCheqiReceiptId());
+} else if (result.isCustomerNotFound()) {
+    System.out.println("⚠️ Customer not found");
+} else if (result.isDeliveredViaEmail()) {
+    System.out.println("📧 Receipt sent to: " + result.getEmailAddress());
+} else {
+    System.out.println("❌ Failed: " + result.getMessage());
+}
+```
+
+## Complete Example
+
+Here's a complete working example:
+
+```java
+import com.cheqi.sdk.CheqiSDK;
+import com.cheqi.sdk.config.Environment;
+import com.cheqi.sdk.models.*;
+import com.cheqi.sdk.receipt.ReceiptResult;
+import com.cheqi.commons.enums.CardProvider;
+import java.math.BigDecimal;
+import java.time.Instant;
+
+public class CheqiQuickstart {
+    public static void main(String[] args) {
+        // 1. Initialize SDK
+        CheqiSDK sdk = CheqiSDK.builder()
+            .apiEndpoint(Environment.SANDBOX)
+            .apiKey(System.getenv("CHEQI_API_KEY"))
+            .build();
+        
+        // 2. Identify customer
+        IdentificationDetails customer = IdentificationDetails.builder()
+            .paymentType(PaymentType.CARD_PAYMENT)
+            .cardDetails(CardDetails.builder()
+                .paymentAccountReference("PAR123456789")
+                .cardProvider(CardProvider.VISA)
+                .build())
+            .customerEmail("customer@example.com")
+            .build();
+        
+        // 3. Build receipt
+        ReceiptTemplateRequest receipt = ReceiptTemplateRequest.builder()
+            .documentNumber("INV-001")
+            .issueDate(Instant.now())
+            .currency("EUR")
+            .totalAmount(new BigDecimal("12.10"))
+            .totalTaxAmount(new BigDecimal("2.10"))
+            .addProduct(Product.builder()
+                .name("Espresso")
+                .quantity(2.0)
+                .unitCode(UnitCode.ONE)
+                .unitPrice("5.00")
+                .subtotal("10.00")
+                .total("12.10")
+                .addTax(21.0, "VAT", "2.10")
+                .build())
+            .addTax(Tax.builder()
+                .rate(21.0)
+                .type("VAT")
+                .taxableAmount("10.00")
+                .amount("2.10")
+                .build())
+            .build();
+        
+        // 4. Send receipt
+        try {
+            ReceiptResult result = sdk.getReceiptService()
+                .processCompleteReceipt(customer, receipt);
+            
+            if (result.isSuccess()) {
+                System.out.println("✅ Success! Receipt delivered.");
+            }
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+        }
+    }
+}
+```
+
+## What Happens Next?
+
+**Cheqi handles everything for you:**
+
+<Steps>
+  <Step title="Customer Matching">
+    Cheqi matches the customer using the payment details (PAR, IBAN, etc.)
+  </Step>
+  
+  <Step title="Receipt Generation">
+    A UBL-compliant receipt template is generated from your data
+  </Step>
+  
+  <Step title="Smart Delivery Decision">
+    **If customer uses Cheqi:**
+    - Receipt is encrypted for each device using hybrid RSA+AES encryption
+    - Pushed to all customer devices with notification
+    - Only customer can decrypt and view
+    
+    **If customer doesn't use Cheqi:**
+    - We automatically generate a professional PDF
+    - We send it via email (if you provided one)
+    - Beautifully formatted, no work needed from you
+  </Step>
+  
+  <Step title="Delivery Confirmation">
+    You receive confirmation of successful delivery (app or email)
+  </Step>
+</Steps>
+
+<Info>
+  **Complete solution:** You send the receipt data once. We handle customer matching, encryption, PDF generation, email delivery, and multi-device sync. Focus on your business, we handle the receipts.
+</Info>
+
+## Testing
+
+### Use Sandbox Environment
+
+Always test in sandbox before going to production:
+
+```java
+CheqiSDK sdk = CheqiSDK.builder()
+    .apiEndpoint(Environment.SANDBOX)  // Safe testing environment
+    .apiKey(System.getenv("CHEQI_SANDBOX_API_KEY"))
+    .build();
+```
+
+### Test Customer Scenarios
 
 <AccordionGroup>
-
-<Accordion icon="message-bot" title="Install our Github app">
-  Our Github app automatically deploys your changes to your docs site, so you
-  don't need to manage deployments yourself. You can find the link to install on
-  your [dashboard](https://dashboard.mintlify.com). Once the bot has been
-  successfully installed, there should be a check mark next to the commit hash
-  of the repo.
-</Accordion>
-<Accordion icon="rocket" title="Push your changes">
-  [Commit and push your changes to
-  Git](https://docs.github.com/en/get-started/using-git/pushing-commits-to-a-remote-repository#about-git-push)
-  for your changes to update in your docs site. If you push and don't see that
-  the Github app successfully deployed your changes, you can also manually
-  update your docs through our [dashboard](https://dashboard.mintlify.com).
-</Accordion>
-
+  <Accordion title="Customer Found">
+    Use a test PAR that matches a customer in sandbox:
+    ```java
+    .paymentAccountReference("TEST_PAR_FOUND")
+    ```
+    Expected: `result.isSuccess() == true`
+  </Accordion>
+  
+  <Accordion title="Customer Not Found">
+    Use a PAR that doesn't match any customer:
+    ```java
+    .paymentAccountReference("TEST_PAR_NOT_FOUND")
+    ```
+    Expected: `result.isCustomerNotFound() == true`
+  </Accordion>
+  
+  <Accordion title="Email Fallback">
+    Include email for customers not in Cheqi:
+    ```java
+    .paymentAccountReference("TEST_PAR_NOT_FOUND")
+    .customerEmail("test@example.com")
+    ```
+    Expected: `result.isDeliveredViaEmail() == true`
+  </Accordion>
 </AccordionGroup>
 
-## Update your docs
+## Next Steps
 
-Add content directly in your files with MDX syntax and React components. You can use any of our components, or even build your own.
-
-<CardGroup>
-
-<Card title="Add Content With MDX" icon="file" href="/essentials/markdown">
-  Add content to your docs with MDX syntax.
-</Card>
-
-<Card
-  title="Add Code Blocks"
-  icon="square-code"
-  href="/essentials/code"
->
-  Add code directly to your docs with syntax highlighting.
-</Card>
-
-<Card
-  title="Add Images"
-  icon="image"
-  href="/essentials/images"
->
-  Add images to your docs to make them more engaging.
-</Card>
-
-<Card
-  title="Add Custom Components"
-  icon="puzzle-piece"
-  href="/essentials/reusable-snippets"
->
-  Add templates to your docs to make them more reusable.
-</Card>
-
+<CardGroup cols={2}>
+  <Card title="Authentication Guide" icon="key" href="/authentication/overview">
+    Learn about API keys and OAuth 2.0
+  </Card>
+  <Card title="Receipt Flow" icon="receipt" href="/receipts/overview">
+    Understand the complete receipt processing flow
+  </Card>
+  <Card title="Java SDK Reference" icon="code" href="/sdk/java">
+    Explore all SDK features and methods
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Browse the complete API documentation
+  </Card>
 </CardGroup>
